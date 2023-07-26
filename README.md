@@ -6,6 +6,8 @@ drive2goruce creates a [gource](https://gource.io) compatible log from the histo
 
 Google Drive's history data is complex. The code here is sufficient to handle the data we threw at it, but there are edge cases and activity types we don't handle; you may need to make some changes to get it to work on your folders. If you do, we'd appreciate if you send a pull request!
 
+This tool currently works on histories up to around 10000 activities (about a year of moderate to heavy activity, in our experience). Anything much longer than that is likely to run out of Google Apps Script memory.
+
 ## Usage
 
 The code here is split between Google Apps Script to get the raw activity data and a local Node.js script to process it into Goruce format; this split allows access to the Google API without dealing with OAuth while also allowing fast local iteration on the tricky conversion code.

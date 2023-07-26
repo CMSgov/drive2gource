@@ -111,6 +111,8 @@ function logAction(activity, type, target = getTargetId(activity)) {
     // sometimes google just doesn't give us a creation event for a file, so
     // we don't know where it is. this is rare enough that we can just ignore
     // events for such files
+
+    // TODO: we have the _d2g_parents mechanism now; expand to handle this case
     return;
   }
   assert(colors[target]);
@@ -138,8 +140,6 @@ function logAction(activity, type, target = getTargetId(activity)) {
 const activities = data.split("\n").map(JSON.parse);
 
 activities.forEach((activity) => {
-  //   console.log(JSON.stringify(activity));
-
   try {
     assert(activity.targets.length == 1);
     assert(activity.timestamp);
