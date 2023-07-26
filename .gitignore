@@ -1,4 +1,4 @@
-history.ndjson
-gource.log
+*.ndjson
+*.log
 *.swp
 .DS_Store

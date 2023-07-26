@@ -1,16 +1,32 @@
+// SPDX-License-Identifier: CC0-1.0
+
 import * as fs from "fs/promises";
 
-const root = "items/YOUR_DIRECTORY_ID";
-
 function todo() {
-  throw new Error("todo");
+  throw new Error(
+    "Not implemented - you've likely hit a feature of the Google Drive activity log format we don't support yet."
+  );
 }
 
 function assert(bool) {
-  if (!bool) throw new Error("assert failed");
+  if (!bool)
+    throw new Error(
+      "Assertion failed - you've likely hit an edge case in the Google Drive activity log format we don't support yet."
+    );
 }
 
-const data = await fs.readFile("./history.ndjson", "utf-8");
+const [, , rootId, dataPath, currentUserName] = process.argv;
+
+if (!dataPath) {
+  console.log(
+    'Usage: node history-to-gource.mjs RootDirectoryId path/to/activity/log ["Your Name"]'
+  );
+  process.exit(1);
+}
+
+const root = `items/${rootId}`;
+
+const data = await fs.readFile(dataPath, "utf-8");
 
 const paths = {};
 const colors = {};
@@ -51,16 +67,18 @@ function getColor(mimeType) {
   return colors[mimeType] || "FFFFFF";
 }
 
+function pathHasPrefix(path, prefix) {
+  if (path.length < prefix.length) {
+    return false;
+  }
+
+  return prefix.every((element, i) => path[i] == element);
+}
+
 // If `path` has prefix `oldPrefix`, return the path with the prefix
 // `newPrefix` instead. Otherwise, return null.
 function replacePathPrefix(path, oldPrefix, newPrefix) {
-  if (path.length < oldPrefix.length) {
-    // too short, couldn't have the prefix
-    return null;
-  }
-
-  if (!oldPrefix.every((element, i) => path[i] == element)) {
-    // doesn't have the prefix
+  if (!pathHasPrefix(path, oldPrefix)) {
     return null;
   }
 
@@ -68,8 +86,6 @@ function replacePathPrefix(path, oldPrefix, newPrefix) {
 }
 
 function moveFolder(activity, oldFolder, newFolder) {
-  // someone moved a folder. bad news for us.
-
   Object.keys(paths).forEach((itemId) => {
     const newPath = replacePathPrefix(paths[itemId], oldFolder, newFolder);
 
@@ -77,6 +93,15 @@ function moveFolder(activity, oldFolder, newFolder) {
       logAction(activity, "D", itemId);
       paths[itemId] = newPath;
       logAction(activity, "A", itemId);
+    }
+  });
+}
+
+function deleteFolder(activity, folder) {
+  Object.keys(paths).forEach((itemId) => {
+    if (pathHasPrefix(paths[itemId], folder)) {
+      logAction(activity, "D", itemId);
+      delete paths[itemId];
     }
   });
 }
@@ -89,16 +114,30 @@ function logAction(activity, type, target = getTargetId(activity)) {
     return;
   }
   assert(colors[target]);
+
+  let name;
+  if (activity.actors[0].user.knownUser.isCurrentUser) {
+    if (currentUserName) {
+      name = currentUserName;
+    } else {
+      throw new Error(
+        "This log contains edits by you (or the user who downloaded the log). Google's API makes it difficult to automatically obtain the current user's name, so you'll need to manually provide this on the command line, after the path to the log."
+      );
+    }
+  } else {
+    name = activity.actors[0].user._d2g_info.names?.[0]?.displayName;
+  }
+
   console.log(
-    `${dateToUnix(activity.timestamp)}|${
-      activity.actors[0].user.info.names[0].displayName
-    }|${type}|/${paths[target].join("/")}|${colors[target]}`
+    `${dateToUnix(activity.timestamp)}|${name}|${type}|/${paths[target].join(
+      "/"
+    )}|${colors[target]}`
   );
 }
 
-data.split("\n").forEach((line) => {
-  const activity = JSON.parse(line);
+const activities = data.split("\n").map(JSON.parse);
 
+activities.forEach((activity) => {
   //   console.log(JSON.stringify(activity));
 
   try {
@@ -133,9 +172,28 @@ data.split("\n").forEach((line) => {
             activity.targets[0].driveItem.title,
           ];
         } else {
-          // ...but sometimes there isn't a bundled move; in this case assume it was created in the root
+          // ...but sometimes there isn't a bundled move; in this case, we do our best to guess
+
+          // first, was the file moved later? if so, use the removedParents from
+          // there: we want to find the first removedParent we recognize
+          const firstRemovedParent = activities
+            .filter((act) => getTargetId(act) == getTargetId(activity))
+            .map((act) => act.primaryActionDetail?.move?.removedParents)
+            .filter((parents) => parents)
+            .flat()
+            .find((parent) => paths[parent.driveItem.name]);
+
+          let parent;
+
+          if (firstRemovedParent) {
+            parent = firstRemovedParent.driveItem.name;
+          } else {
+            assert(activity.targets[0]._d2g_parents.length == 1);
+            parent = activity.targets[0]._d2g_parents[0];
+          }
+
           paths[getTargetId(activity)] = [
-            ...paths[root],
+            ...paths[parent],
             activity.targets[0].driveItem.title,
           ];
         }
@@ -184,10 +242,14 @@ data.split("\n").forEach((line) => {
         paths[getTargetId(activity)]
       ) {
         // moved to outside; for our purposes, a delete
-
         logAction(activity, "D");
 
+        const oldPath = paths[getTargetId(activity)];
         delete paths[getTargetId(activity)];
+
+        if (activity.targets[0].driveItem.driveFolder) {
+          deleteFolder(activity, oldPath);
+        }
       } else if (
         activity.primaryActionDetail.move.addedParents &&
         activity.primaryActionDetail.move.addedParents.length == 1 &&
@@ -202,8 +264,6 @@ data.split("\n").forEach((line) => {
       ) {
         // move within the folder
 
-        assert(activity.targets[0].driveItem.file);
-
         logAction(activity, "D");
 
         const parent =
@@ -211,12 +271,17 @@ data.split("\n").forEach((line) => {
             activity.primaryActionDetail.move.addedParents[0].driveItem.name
           ];
         assert(parent);
+        const oldPath = [...paths[getTargetId(activity)]];
         paths[getTargetId(activity)] = [
           ...parent,
           activity.targets[0].driveItem.title,
         ];
 
         logAction(activity, "A");
+
+        if (activity.targets[0].driveItem.driveFolder) {
+          moveFolder(activity, oldPath, paths[getTargetId(activity)]);
+        }
       } else if (
         activity.primaryActionDetail.move.addedParents.every(
           (x) => !paths[x]
@@ -252,11 +317,24 @@ data.split("\n").forEach((line) => {
       logAction(activity, "M");
     } else if (activity.primaryActionDetail.permissionChange) {
       logAction(activity, "M");
+    } else if (activity.primaryActionDetail.delete) {
+      logAction(activity, "D");
+
+      let path = paths[getTargetId(activity)];
+      delete paths[getTargetId(activity)];
+
+      if (activity.targets[0].driveItem.driveFolder) {
+        deleteFolder(activity, path);
+      }
     } else {
       todo();
     }
   } catch (e) {
-    console.log(JSON.stringify(activity));
+    console.error(
+      `Error encountered while parsing this log entry: ${JSON.stringify(
+        activity
+      )}`
+    );
     throw e;
   }
 });
