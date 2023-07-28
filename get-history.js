@@ -31,7 +31,7 @@ function exportActivity() {
   }
 
   let users = {};
-  let parents = {};
+  let seenFiles = {};
 
   console.log(
     "Activities fetched. Fetching additional data (usernames and file parents)..."
@@ -45,17 +45,22 @@ function exportActivity() {
     if (!users[userId]) {
       users[userId] = People.People.get(userId, { personFields: "names" });
     }
-    if (act.primaryActionDetail.create) {
+    if (
+      act.targets[0].driveItem &&
+      !seenFiles[act.targets[0].driveItem.name] &&
+      !act.actions.some((x) => x.detail.move)
+    ) {
+      // first time we're seeing a file, and the activity doesn't have a move
+      // component; grab its current parents in case we need them as a fallback
       const id = act.targets[0].driveItem.name;
       const shortId = id.split("/")[1];
-      if (!parents[id]) {
-        const parentIter = DriveApp.getFileById(shortId).getParents();
-        parents[id] = [];
-        while (parentIter.hasNext()) {
-          parents[id].push("items/" + parentIter.next().getId());
-        }
+      const parentIter = DriveApp.getFileById(shortId).getParents();
+      let parents = [];
+      while (parentIter.hasNext()) {
+        parents.push("items/" + parentIter.next().getId());
       }
-      act.targets[0]._d2g_parents = parents[id];
+      act.targets[0]._d2g_parents = parents;
+      seenFiles[id] = true;
     }
 
     act.actors[0].user._d2g_info = users[userId];

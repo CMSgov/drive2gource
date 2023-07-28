@@ -2,17 +2,12 @@
 
 import * as fs from "fs/promises";
 
-function todo() {
-  throw new Error(
-    "Not implemented - you've likely hit a feature of the Google Drive activity log format we don't support yet."
-  );
+function todo(desc) {
+  throw new Error(`Not implemented: ${desc}.`);
 }
 
-function assert(bool) {
-  if (!bool)
-    throw new Error(
-      "Assertion failed - you've likely hit an edge case in the Google Drive activity log format we don't support yet."
-    );
+function assert(bool, desc) {
+  if (!bool) throw new Error(`Assertion failed: ${desc}.`);
 }
 
 const [, , rootId, dataPath, currentUserName] = process.argv;
@@ -28,11 +23,12 @@ const root = `items/${rootId}`;
 
 const data = await fs.readFile(dataPath, "utf-8");
 
+const activities = data.split("\n").map(JSON.parse);
 const paths = {};
 const colors = {};
 
 function getTargetId(activity) {
-  assert(activity.targets.length == 1);
+  assert(activity.targets.length == 1, "activity with multiple targets");
 
   if (activity.targets[0].driveItem) {
     return activity.targets[0].driveItem.name;
@@ -40,7 +36,7 @@ function getTargetId(activity) {
     return activity.targets[0].fileComment.parent.name;
   }
 
-  todo();
+  todo("unknown target type");
 }
 
 function dateToUnix(date) {
@@ -106,16 +102,61 @@ function deleteFolder(activity, folder) {
   });
 }
 
-function logAction(activity, type, target = getTargetId(activity)) {
-  if (!paths[target]) {
-    // sometimes google just doesn't give us a creation event for a file, so
-    // we don't know where it is. this is rare enough that we can just ignore
-    // events for such files
+// fallback called when a file starts showing up with no indication as to its
+// path, and we need to make an inference as to its path at the time
+function discoverPath(activity) {
+  // first, was the file moved later? if so, use the removedParents from
+  // there: we want to find the first removedParent we recognize
+  const firstRemovedParent = activities
+    .filter((act) => getTargetId(act) == getTargetId(activity))
+    .map((act) => act.primaryActionDetail?.move?.removedParents)
+    .filter((parents) => parents)
+    .flat()
+    .find((parent) => paths[parent.driveItem.name]);
 
-    // TODO: we have the _d2g_parents mechanism now; expand to handle this case
-    return;
+  let parent;
+
+  if (firstRemovedParent) {
+    parent = firstRemovedParent.driveItem.name;
+  } else {
+    // failing that, use the current parent, which the Apps Script obtains in
+    // case it's needed for such cases
+    assert(
+      activity.targets[0]._d2g_parents.length == 1,
+      "file has multiple parents"
+    );
+    parent = activity.targets[0]._d2g_parents[0];
   }
-  assert(colors[target]);
+
+  paths[getTargetId(activity)] = [
+    ...paths[parent],
+    activity.targets[0].driveItem.title,
+  ];
+}
+
+let generatedEvents = 0;
+
+function logAction(activity, type, target = getTargetId(activity)) {
+  // console.error(type, target, paths[target]);
+  if (!paths[target]) {
+    // create with no associated move, or file that just randomly starts
+    // getting edits with neither a create nor a move first; both are known
+    // to happen
+    if (type == "D") {
+      // just ignore double deletes - for some example, we can sometimes get
+      // a separate delete event for a file in a folder that was just deleted
+      return;
+    }
+    discoverPath(activity);
+  }
+
+  if (!colors[target]) {
+    assert(
+      target == getTargetId(activity),
+      "can't determine color for file first seen in a folder move(!)"
+    );
+    colors[target] = getColor(activity.targets[0].driveItem.mimeType);
+  }
 
   let name;
   if (activity.actors[0].user.knownUser.isCurrentUser) {
@@ -135,72 +176,49 @@ function logAction(activity, type, target = getTargetId(activity)) {
       "/"
     )}|${colors[target]}`
   );
+
+  generatedEvents++;
 }
 
-const activities = data.split("\n").map(JSON.parse);
+let successfulActivities = 0;
+let errors = 0;
 
 activities.forEach((activity) => {
   try {
-    assert(activity.targets.length == 1);
-    assert(activity.timestamp);
+    assert(activity.targets.length == 1, "activity has multiple targets");
+    assert(activity.timestamp, "activity has no timestamp");
 
     if (activity.primaryActionDetail.create) {
-      assert(activity.actors.length == 1);
-      assert(activity.actors[0].user.knownUser.personName);
+      assert(activity.actors.length == 1, "activity has multiple targets");
       if (getTargetId(activity) == root) {
         paths[getTargetId(activity)] = [];
-        colors[getTargetId(activity)] = getColor(
-          activity.targets[0].driveItem.mimeType
-        );
 
         logAction(activity, "A");
       } else {
         const moveAction = activity.actions.find((x) => x.detail.move)?.detail
           ?.move;
 
-        // generally, a document created in a directory is modelled as a create with a bundled move
+        // often, a document created in a directory is modelled as a create
+        // with a bundled move, in which case we can get the parents this way
         if (moveAction) {
-          assert(moveAction.addedParents);
-          assert(moveAction.addedParents.length == 1);
-          assert(!moveAction.removedParents);
-          assert(!paths[getTargetId(activity)]);
+          assert(moveAction.addedParents, "create-move didn't add parents");
+          assert(
+            moveAction.addedParents.length == 1,
+            "create-move added multiple parents"
+          );
+          assert(!moveAction.removedParents, "create-move removed parents");
+          assert(
+            !paths[getTargetId(activity)],
+            "create-move for a file that already exists"
+          );
 
           const parent = paths[moveAction.addedParents[0].driveItem.name];
-          assert(parent);
+          assert(parent, "create-move into an unknown parent");
           paths[getTargetId(activity)] = [
             ...parent,
             activity.targets[0].driveItem.title,
           ];
-        } else {
-          // ...but sometimes there isn't a bundled move; in this case, we do our best to guess
-
-          // first, was the file moved later? if so, use the removedParents from
-          // there: we want to find the first removedParent we recognize
-          const firstRemovedParent = activities
-            .filter((act) => getTargetId(act) == getTargetId(activity))
-            .map((act) => act.primaryActionDetail?.move?.removedParents)
-            .filter((parents) => parents)
-            .flat()
-            .find((parent) => paths[parent.driveItem.name]);
-
-          let parent;
-
-          if (firstRemovedParent) {
-            parent = firstRemovedParent.driveItem.name;
-          } else {
-            assert(activity.targets[0]._d2g_parents.length == 1);
-            parent = activity.targets[0]._d2g_parents[0];
-          }
-
-          paths[getTargetId(activity)] = [
-            ...paths[parent],
-            activity.targets[0].driveItem.title,
-          ];
         }
-
-        colors[getTargetId(activity)] = getColor(
-          activity.targets[0].driveItem.mimeType
-        );
 
         logAction(activity, "A");
       }
@@ -220,14 +238,11 @@ activities.forEach((activity) => {
           paths[
             activity.primaryActionDetail.move.addedParents[0].driveItem.name
           ];
-        assert(parent);
+        assert(parent, "move from outside into unknown parent");
         paths[getTargetId(activity)] = [
           ...parent,
           activity.targets[0].driveItem.title,
         ];
-        colors[getTargetId(activity)] = getColor(
-          activity.targets[0].driveItem.mimeType
-        );
 
         logAction(activity, "A");
       } else if (
@@ -270,7 +285,6 @@ activities.forEach((activity) => {
           paths[
             activity.primaryActionDetail.move.addedParents[0].driveItem.name
           ];
-        assert(parent);
         const oldPath = [...paths[getTargetId(activity)]];
         paths[getTargetId(activity)] = [
           ...parent,
@@ -292,26 +306,28 @@ activities.forEach((activity) => {
         // entirely sure why we get these - maybe things that end up in
         // scope later? in any case, ignore it
       } else {
-        todo();
+        todo("unknown move type");
       }
     } else if (activity.primaryActionDetail.comment) {
       logAction(activity, "M");
     } else if (activity.primaryActionDetail.rename) {
-      logAction(activity, "D");
-
       const path = paths[getTargetId(activity)];
       if (!path) {
-        // rename of a file we never got creation for. google works in
-        // mysterious ways.
-        return;
-      }
-      const oldPath = [...path];
-      path[path.length - 1] = activity.primaryActionDetail.rename.newTitle;
+        // annoying edge case: first we hear of a file is it getting renamed.
+        // google is funny sometimes.
+        logAction(activity, "A");
+      } else {
+        logAction(activity, "D");
 
-      logAction(activity, "A");
+        const path = paths[getTargetId(activity)];
+        const oldPath = [...path];
+        path[path.length - 1] = activity.primaryActionDetail.rename.newTitle;
 
-      if (activity.targets[0].driveItem.driveFolder) {
-        moveFolder(activity, oldPath, path);
+        logAction(activity, "A");
+
+        if (activity.targets[0].driveItem.driveFolder) {
+          moveFolder(activity, oldPath, path);
+        }
       }
     } else if (activity.primaryActionDetail.edit) {
       logAction(activity, "M");
@@ -323,18 +339,35 @@ activities.forEach((activity) => {
       let path = paths[getTargetId(activity)];
       delete paths[getTargetId(activity)];
 
-      if (activity.targets[0].driveItem.driveFolder) {
+      if (path && activity.targets[0].driveItem.driveFolder) {
         deleteFolder(activity, path);
       }
     } else {
-      todo();
+      todo("unknown activity type");
     }
+
+    successfulActivities++;
   } catch (e) {
-    console.error(
-      `Error encountered while parsing this log entry: ${JSON.stringify(
-        activity
-      )}`
-    );
-    throw e;
+    if (process.env.D2G_DEBUG) {
+      console.error(
+        `Error encountered while parsing this log entry: ${JSON.stringify(
+          activity
+        )}`
+      );
+      console.error(e);
+    } else {
+      console.error(e.toString());
+    }
+    errors++;
   }
 });
+
+// not really an error, but there's no better-named function for logging to stderr
+console.error(
+  `Converted ${successfulActivities} activities into ${generatedEvents} events.`
+);
+if (errors > 0) {
+  console.error(
+    `Warning: ${errors} activit(ies) skipped due to errors. Set D2G_DEBUG=1 for more detail.`
+  );
+}

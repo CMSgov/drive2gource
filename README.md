@@ -15,11 +15,11 @@ The code here is split between Google Apps Script to get the raw activity data a
 1. Make sure you have Node.js and Gource installed. The latter is available as `gource` from Homebrew and most Linux package managers; Windows builds of Gource are also available, but this script hasn't been tested there.
 2. Find the ID of the Google Drive folder you want to visualize. This will look something like `1RmiS97L0x0k_CQRbK8__Vuqt4X7ijWr7`; it can be found by navigating to the folder in the Google Drive web UI and looking at the URL.
 3. [Create a Google Apps Script project](https://script.google.com/home) and paste in the contents of `get-history.js`, substituting in the folder ID from the previous step at the top.
-4. In "Services" on the left, add "Drive Activity API" and "Peopleapi" (the latter is needed to get human-readable names for editors), keeping the default options.
+4. In "Services" on the left, add "Drive Activity API" and "Peopleapi", keeping the default options for each.
 5. Click "Run" at the top.
    - If this is the first time, click through the permission prompt. (The script requires permission to read from Google Drive and Google Drive activity for obvious reason; write to Google Drive so we can store the output somewhere, and "access your contacts" to get the names of other editors.)
 6. When it's done, it'll save a `.ndjson` file to your My Drive folder, and print the download link; download it.
-7. Run `node history-to-gource.mjs RootFolderId path/to/log.ndjson "Your Name" > gource.log`.
+7. Run `node history-to-gource.mjs FolderIdFromStep2 path/to/log.ndjson "Your Name" > gource.log`.
    - The last parameter (your name) is only required if you appear in the activity log; Google Apps Script makes it easy enough to get the names of other editors but surprisingly difficult to get your own, so we ask for it manually.
 8. Run `gource gource.log` (plus whatever other Gource parameters you'd like).
    - See [Gource's docs](https://github.com/acaudwell/Gource) for a full list of parameters. You'll probably want to set `--seconds-per-day` to something less than the default of 10, and `--max-file-lag` (which limits how long, in seconds, Gource can delay showing an event to make the animation look better) to something close to your `--seconds-per-day` to prevent the animation from getting too far out of sync. `--high-dpi` (Gource v0.53+) is well worth setting if you have a monitor that supports it.
