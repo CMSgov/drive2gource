@@ -63,8 +63,8 @@ function exportActivity() {
       }
       catch(e)
       {
-        console.log(e)
-        console.log("Could not parse file by Id!")
+        console.log(e);
+        console.log("Could not parse file by Id!");
       }
       
     }
@@ -82,7 +82,15 @@ function exportActivity() {
     const userId = act.actors[0].user.knownUser.personName;
     
     if (!users[userId]) {
-      users[userId] = People.People.get(userId, { personFields: "names" });
+      try{
+        users[userId] = People.People.get(userId, { personFields: "names" });
+      }
+      catch(e)
+      {
+        console.log(e);
+        console.log("Could not get user by ID!");
+        return;
+      }
     }
 
     act.actors[0].user._d2g_info = users[userId];
