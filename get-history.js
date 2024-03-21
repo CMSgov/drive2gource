@@ -41,10 +41,6 @@ function exportActivity() {
   let lastProgressReport = Date.now();
 
   activities.forEach((act, i) => {
-    const userId = act.actors[0].user.knownUser.personName;
-    if (!users[userId]) {
-      users[userId] = People.People.get(userId, { personFields: "names" });
-    }
     if (
       act.targets[0].driveItem &&
       !seenFiles[act.targets[0].driveItem.name] &&
@@ -54,21 +50,50 @@ function exportActivity() {
       // component; grab its current parents in case we need them as a fallback
       const id = act.targets[0].driveItem.name;
       const shortId = id.split("/")[1];
-      const parentIter = DriveApp.getFileById(shortId).getParents();
-      let parents = [];
-      while (parentIter.hasNext()) {
-        parents.push("items/" + parentIter.next().getId());
-      }
-      act.targets[0]._d2g_parents = parents;
-      seenFiles[id] = true;
-    }
 
-    act.actors[0].user._d2g_info = users[userId];
+      try
+      {
+        const parentIter = DriveApp.getFileById(shortId).getParents();
+        let parents = [];
+        while (parentIter.hasNext()) {
+          parents.push("items/" + parentIter.next().getId());
+        }
+        act.targets[0]._d2g_parents = parents;
+        seenFiles[id] = true;
+      }
+      catch(e)
+      {
+        console.log(e);
+        console.log("Could not parse file by Id!");
+      }
+      
+    }
 
     if (lastProgressReport + 1000 * 10 <= Date.now()) {
       console.log(`Fetched additional data for ${i + 1} activities...`);
       lastProgressReport = Date.now();
     }
+
+    if (!act.actors[0].user || act.actors[0].user.deletedUser)
+    {
+      return;
+    }
+
+    const userId = act.actors[0].user.knownUser.personName;
+    
+    if (!users[userId]) {
+      try{
+        users[userId] = People.People.get(userId, { personFields: "names" });
+      }
+      catch(e)
+      {
+        console.log(e);
+        console.log("Could not get user by ID!");
+        return;
+      }
+    }
+
+    act.actors[0].user._d2g_info = users[userId];
   });
 
   const file = DriveApp.createFile(
