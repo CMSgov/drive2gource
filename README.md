@@ -38,7 +38,7 @@ Disclosure Policies, see [SECURITY.md](SECURITY.md).
 
 ## Authors and Maintainers
 
-A full list of contributors can be found on [https://github.cms.gov/dsacms/drive2gource/graphs/contributors](https://github.cms.gov/dsacms/drive2gource/graphs/contributors).
+A full list of contributors can be found on https://github.com/CMSgov/drive2gource/graphs/contributors.
 
 ## Public domain
 
